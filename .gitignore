@@ -1,0 +1,26 @@
+# Build artifacts
+*.o
+*.obj
+*.exe
+client
+client.exe
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug files
+*.dSYM/
+*.pdb
+*.ilk
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log

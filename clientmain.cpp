@@ -27,6 +27,7 @@
 #include "calcLib.h"
 
 // Debug macro - can be enabled with -DDEBUG during compilation
+// UPDATED: 2025-09-09 14:27 - Latest version with robust TCP handling
 #ifdef DEBUG
     #define DEBUG_PRINT(x) std::cout << x << std::endl
 #else

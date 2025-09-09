@@ -79,19 +79,18 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    std::cout << "Protocol: " << toLowerCase(url_info.protocol) 
-              << ", Host " << url_info.host 
-              << ", port " << url_info.port 
-              << " and path " << toLowerCase(url_info.api) << "." << std::endl;
-
     bool success = false;
     std::string successful_protocol;
 
     // Handle different protocol combinations
     if (toLowerCase(url_info.protocol) == "tcp") {
+        std::cout << "Host " << url_info.host << ", and port " << url_info.port << "." << std::endl;
         int sockfd = connectTCP(url_info.host, url_info.port);
         if (sockfd < 0) {
             printError("CANT CONNECT TO " + url_info.host);
+#ifdef _WIN32
+            WSACleanup();
+#endif
             return EXIT_FAILURE;
         }
 
@@ -107,10 +106,14 @@ int main(int argc, char* argv[]) {
         successful_protocol = "TCP";
     } 
     else if (toLowerCase(url_info.protocol) == "udp") {
+        std::cout << "Host " << url_info.host << ", and port " << url_info.port << "." << std::endl;
         struct sockaddr_in server_addr;
         int sockfd = createUDPSocket(url_info.host, url_info.port, server_addr);
         if (sockfd < 0) {
             printError("CANT CONNECT TO " + url_info.host);
+#ifdef _WIN32
+            WSACleanup();
+#endif
             return EXIT_FAILURE;
         }
 
@@ -124,6 +127,7 @@ int main(int argc, char* argv[]) {
         successful_protocol = "UDP";
     }
     else if (toLowerCase(url_info.protocol) == "any") {
+        std::cout << "Host " << url_info.host << ", and port " << url_info.port << "." << std::endl;
         // Try UDP first
         struct sockaddr_in server_addr;
         int udp_sockfd = createUDPSocket(url_info.host, url_info.port, server_addr);

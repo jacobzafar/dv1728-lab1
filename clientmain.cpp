@@ -212,6 +212,19 @@ int connectTCP(const std::string& host, int port) {
         return -1;
     }
     
+    // Set socket timeout for more reliable operation
+#ifdef _WIN32
+    DWORD timeout = 5000; // 5 seconds
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char*)&timeout, sizeof(timeout));
+#else
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+    
     if (connect(sockfd, res->ai_addr, res->ai_addrlen) < 0) {
         close(sockfd);
         freeaddrinfo(res);
@@ -250,7 +263,7 @@ int createUDPSocket(const std::string& host, int port, struct sockaddr_in& serve
 bool handleTCPText(int sockfd, const std::string& host, int port) {
     char buffer[1024];
     
-    // Simple approach: assume server sends assignment directly
+    // Robust approach: handle both protocol negotiation and direct assignment
     ssize_t bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
     if (bytes_read <= 0) {
         printError("Failed to receive message from server");
@@ -260,69 +273,110 @@ bool handleTCPText(int sockfd, const std::string& host, int port) {
     buffer[bytes_read] = '\0';
     std::string message(buffer);
     
-    // Check if this looks like an assignment (contains operation and numbers)
-    if (message.find("add") != std::string::npos || 
-        message.find("sub") != std::string::npos ||
-        message.find("mul") != std::string::npos ||
-        message.find("div") != std::string::npos) {
-        // This is directly an assignment
-        std::string assignment = message;
+    // Check if this is protocol negotiation (contains "TEXT TCP")
+    if (message.find("TEXT TCP") != std::string::npos) {
+        // Handle protocol negotiation
+        std::string protocol_response = message;
         
-        // Remove trailing newline if present
-        if (!assignment.empty() && assignment.back() == '\n') {
-            assignment.pop_back();
+        // Continue reading until we get complete protocol list (ends with empty line)
+        while (protocol_response.find("\n\n") == std::string::npos) {
+            bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+            if (bytes_read <= 0) break;
+            buffer[bytes_read] = '\0';
+            protocol_response += buffer;
         }
         
-        std::cout << "ASSIGNMENT: " << assignment << std::endl;
-        
-        // Parse and solve
-        std::istringstream iss(assignment);
-        std::string operation;
-        int value1, value2;
-        
-        if (!(iss >> operation >> value1 >> value2)) {
-            printError("Invalid assignment format");
+        // Check if server supports TEXT TCP 1.1 (or any version)
+        bool supports_text_tcp = (protocol_response.find("TEXT TCP") != std::string::npos);
+        if (!supports_text_tcp) {
+            printError("MISSMATCH PROTOCOL");
             return false;
         }
         
-        // Calculate result
-        uint32_t op_code = string_to_operation(operation.c_str());
-        int32_t result = calculate(op_code, value1, value2);
+        // Send protocol acceptance (try 1.1 first, fallback to what server offers)
+        std::string accept_msg;
+        if (protocol_response.find("TEXT TCP 1.1") != std::string::npos) {
+            accept_msg = "TEXT TCP 1.1 OK\n";
+        } else if (protocol_response.find("TEXT TCP 1.0") != std::string::npos) {
+            accept_msg = "TEXT TCP 1.0 OK\n";
+        } else {
+            // Just accept the first TEXT TCP version found
+            accept_msg = "TEXT TCP 1.1 OK\n"; // Default attempt
+        }
         
-        // Send result
-        std::string result_str = std::to_string(result) + "\n";
-        if (send(sockfd, result_str.c_str(), result_str.length(), 0) < 0) {
-            printError("Failed to send result");
+        if (send(sockfd, accept_msg.c_str(), accept_msg.length(), 0) < 0) {
+            printError("Failed to send protocol acceptance");
             return false;
         }
         
-        // Read server response
+        // Now read the assignment
         bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
         if (bytes_read <= 0) {
-            printError("Failed to receive server response");
+            printError("Failed to receive assignment");
             return false;
         }
         
         buffer[bytes_read] = '\0';
-        std::string response(buffer);
-        
-        // Remove trailing newline
-        if (!response.empty() && response.back() == '\n') {
-            response.pop_back();
-        }
-        
-        if (response == "OK") {
-            std::cout << "OK (myresult=" << result << ")" << std::endl;
-            return true;
-        } else {
-            std::cout << "ERROR (myresult=" << result << ")" << std::endl;
-            return false;
-        }
+        message = buffer;
     }
     
-    // If we reach here, the message wasn't recognized as an assignment
-    printError("Unrecognized server message format");
-    return false;
+    // At this point, message should contain the assignment
+    std::string assignment = message;
+    
+    // Remove trailing newline if present
+    if (!assignment.empty() && assignment.back() == '\n') {
+        assignment.pop_back();
+    }
+    
+    std::cout << "ASSIGNMENT: " << assignment << std::endl;
+    
+    // Parse assignment (format: "operation value1 value2")
+    std::istringstream iss(assignment);
+    std::string operation;
+    int value1, value2;
+    
+    if (!(iss >> operation >> value1 >> value2)) {
+        printError("Invalid assignment format");
+        return false;
+    }
+    
+    // Calculate result
+    uint32_t op_code = string_to_operation(operation.c_str());
+    if (op_code == 0) {
+        printError("Unknown operation: " + operation);
+        return false;
+    }
+    int32_t result = calculate(op_code, value1, value2);
+    
+    // Send result
+    std::string result_str = std::to_string(result) + "\n";
+    if (send(sockfd, result_str.c_str(), result_str.length(), 0) < 0) {
+        printError("Failed to send result");
+        return false;
+    }
+    
+    // Read server response
+    bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+    if (bytes_read <= 0) {
+        printError("Failed to receive server response");
+        return false;
+    }
+    
+    buffer[bytes_read] = '\0';
+    std::string response(buffer);
+    
+    // Remove trailing newline
+    if (!response.empty() && response.back() == '\n') {
+        response.pop_back();
+    }
+    
+    if (response == "OK") {
+        std::cout << "OK (myresult=" << result << ")" << std::endl;
+        return true;
+    } else {
+        std::cout << "ERROR (myresult=" << result << ")" << std::endl;
+        return false;
+    }
 }
 
 bool handleTCPBinary(int sockfd, const std::string& host, int port) {

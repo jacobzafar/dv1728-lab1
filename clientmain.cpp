@@ -249,100 +249,80 @@ int createUDPSocket(const std::string& host, int port, struct sockaddr_in& serve
 
 bool handleTCPText(int sockfd, const std::string& host, int port) {
     char buffer[1024];
-    std::string protocol_response;
     
-    // Read protocol negotiation from server
-    ssize_t bytes_read;
-    while ((bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0)) > 0) {
-        buffer[bytes_read] = '\0';
-        protocol_response += buffer;
+    // Simple approach: assume server sends assignment directly
+    ssize_t bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+    if (bytes_read <= 0) {
+        printError("Failed to receive message from server");
+        return false;
+    }
+    
+    buffer[bytes_read] = '\0';
+    std::string message(buffer);
+    
+    // Check if this looks like an assignment (contains operation and numbers)
+    if (message.find("add") != std::string::npos || 
+        message.find("sub") != std::string::npos ||
+        message.find("mul") != std::string::npos ||
+        message.find("div") != std::string::npos) {
+        // This is directly an assignment
+        std::string assignment = message;
         
-        // Check if we've received the complete protocol list (ends with empty line)
-        if (protocol_response.find("\n\n") != std::string::npos) {
-            break;
+        // Remove trailing newline if present
+        if (!assignment.empty() && assignment.back() == '\n') {
+            assignment.pop_back();
+        }
+        
+        std::cout << "ASSIGNMENT: " << assignment << std::endl;
+        
+        // Parse and solve
+        std::istringstream iss(assignment);
+        std::string operation;
+        int value1, value2;
+        
+        if (!(iss >> operation >> value1 >> value2)) {
+            printError("Invalid assignment format");
+            return false;
+        }
+        
+        // Calculate result
+        uint32_t op_code = string_to_operation(operation.c_str());
+        int32_t result = calculate(op_code, value1, value2);
+        
+        // Send result
+        std::string result_str = std::to_string(result) + "\n";
+        if (send(sockfd, result_str.c_str(), result_str.length(), 0) < 0) {
+            printError("Failed to send result");
+            return false;
+        }
+        
+        // Read server response
+        bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_read <= 0) {
+            printError("Failed to receive server response");
+            return false;
+        }
+        
+        buffer[bytes_read] = '\0';
+        std::string response(buffer);
+        
+        // Remove trailing newline
+        if (!response.empty() && response.back() == '\n') {
+            response.pop_back();
+        }
+        
+        if (response == "OK") {
+            std::cout << "OK (myresult=" << result << ")" << std::endl;
+            return true;
+        } else {
+            std::cout << "ERROR (myresult=" << result << ")" << std::endl;
+            return false;
         }
     }
     
-    if (bytes_read <= 0) {
-        printError("Failed to receive protocol information");
-        return false;
-    }
-    
-    // Check if server supports TEXT TCP 1.1
-    if (protocol_response.find("TEXT TCP 1.1\n") == std::string::npos) {
-        printError("MISSMATCH PROTOCOL");
-        return false;
-    }
-    
-    // Send protocol acceptance
-    std::string accept_msg = "TEXT TCP 1.1 OK\n";
-    if (send(sockfd, accept_msg.c_str(), accept_msg.length(), 0) < 0) {
-        printError("Failed to send protocol acceptance");
-        return false;
-    }
-    
-    // Read arithmetic assignment
-    bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_read <= 0) {
-        printError("Failed to receive assignment");
-        return false;
-    }
-    
-    buffer[bytes_read] = '\0';
-    std::string assignment(buffer);
-    
-    // Remove trailing newline
-    if (!assignment.empty() && assignment.back() == '\n') {
-        assignment.pop_back();
-    }
-    
-    std::cout << "ASSIGNMENT: " << assignment << std::endl;
-    
-    // Parse assignment (format: "operation value1 value2")
-    std::istringstream iss(assignment);
-    std::string operation;
-    int value1, value2;
-    
-    if (!(iss >> operation >> value1 >> value2)) {
-        printError("Invalid assignment format");
-        return false;
-    }
-    
-    // Calculate result
-    uint32_t op_code = string_to_operation(operation.c_str());
-    int32_t result = calculate(op_code, value1, value2);
-    
-    DEBUG_PRINT("Calculated the result to " << result);
-    
-    // Send result
-    std::string result_str = std::to_string(result) + "\n";
-    if (send(sockfd, result_str.c_str(), result_str.length(), 0) < 0) {
-        printError("Failed to send result");
-        return false;
-    }
-    
-    // Read server response
-    bytes_read = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_read <= 0) {
-        printError("Failed to receive server response");
-        return false;
-    }
-    
-    buffer[bytes_read] = '\0';
-    std::string response(buffer);
-    
-    // Remove trailing newline
-    if (!response.empty() && response.back() == '\n') {
-        response.pop_back();
-    }
-    
-    if (response == "OK") {
-        std::cout << "OK (myresult=" << result << ")" << std::endl;
-        return true;
-    } else {
-        std::cout << "ERROR (myresult=" << result << ")" << std::endl;
-        return false;
-    }
+    // If we reach here, the message wasn't recognized as an assignment
+    printError("Unrecognized server message format");
+    return false;
 }
 
 bool handleTCPBinary(int sockfd, const std::string& host, int port) {
